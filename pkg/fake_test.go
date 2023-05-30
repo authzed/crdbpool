@@ -2,9 +2,9 @@ package pool
 
 import (
 	"context"
+	"hash/maphash"
+	"strconv"
 	"sync"
-
-	"github.com/google/uuid"
 )
 
 var (
@@ -44,7 +44,7 @@ type FakePool struct {
 
 func NewFakePool(maxConns uint32) *FakePool {
 	return &FakePool{
-		id:          uuid.NewString(),
+		id:          strconv.FormatUint(new(maphash.Hash).Sum64(), 16),
 		maxConns:    maxConns,
 		gc:          make(map[*FakeConn]uint32, 0),
 		nodeForConn: make(map[*FakeConn]uint32, 0),

@@ -14,7 +14,7 @@ import (
 	"golang.org/x/exp/slices"
 	"golang.org/x/sync/semaphore"
 
-	log "github.com/authzed/spicedb/internal/logging"
+	log "github.com/rs/zerolog"
 )
 
 var (

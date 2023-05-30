@@ -11,7 +11,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/time/rate"
 
-	log "github.com/authzed/spicedb/internal/logging"
+	log "github.com/rs/zerolog"
 )
 
 const errorBurst = 2
