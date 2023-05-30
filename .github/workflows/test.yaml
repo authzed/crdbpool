@@ -1,0 +1,25 @@
+---
+name: "Build & Test"
+on:  # yamllint disable-line rule:truthy
+  push:
+    branches:
+      - "main"
+  pull_request:
+    branches:
+      - "*"
+  merge_group:
+    types:
+      - "checks_requested"
+env:
+  GO_VERSION: "~1.20.4"
+jobs:
+  unit:
+    name: "Unit"
+    runs-on: "ubuntu-latest"
+    steps:
+      - uses: "actions/checkout@v3"
+      - uses: "authzed/actions/setup-go@main"
+        with:
+          go-version: "${{ env.GO_VERSION }}"
+      - name: "Unit tests"
+        run: "go run mage.go test:unit"
