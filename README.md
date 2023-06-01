@@ -1,9 +1,33 @@
 # crdbpool
 
-`crdbpool` implements a connection pool for CockroachDB that wraps [pgx](https://github.com/jackc/pgx).
-It ensures connections are evenly balanced across Cockroach nodes and can retry queries against a different node when the query fails.
+[![Go Report Card](https://goreportcard.com/badge/github.com/authzed/crdbpool)](https://goreportcard.com/report/github.com/authzed/crdbpool)
+[![GoDoc](https://pkg.go.dev/badge/s.svg)](https://pkg.go.dev/github.com/authzed/crdbpool)
 
-## Usage
+`crdbpool` implements a node-aware connection pool for [CockroachDB] by wrapping [pgx].
+
+By introducing advanced health-checking, this library is able to improve:
+- performance by balancing connections evenly across nodes
+- resiliency by retrying failed queries against a different node
+
+Have questions? Ask in our [Discord].
+
+Looking to contribute? See [CONTRIBUTING.md].
+
+You can find issues by priority: [Urgent], [High], [Medium], [Low], [Maybe].
+There are also [good first issues].
+
+[CockroachDB]: https://github.com/cockroachdb/cockroach
+[pgx]: https://github.com/jackc/pgx
+[Discord]: https://authzed.com/discord
+[CONTRIBUTING.md]: https://github.com/authzed/spicedb/blob/main/CONTRIBUTING.md
+[Urgent]: https://github.com/authzed/spicedb/labels/priority%2F0%20urgent
+[High]: https://github.com/authzed/spicedb/labels/priority%2F1%20high
+[Medium]: https://github.com/authzed/spicedb/labels/priority%2F2%20medium
+[Low]: https://github.com/authzed/spicedb/labels/priority%2F3%20low
+[Maybe]: https://github.com/authzed/spicedb/labels/priority%2F4%20maybe
+[good first issues]: https://github.com/authzed/spicedb/labels/hint%2Fgood%20first%20issue
+
+## Example Usage
 
 ```go
 package main
@@ -20,30 +44,30 @@ import (
 )
 
 func main() {
-	// create a health checker that will discover crdb nodes
+	// Allocate a health checker that will track CockroachDB nodes
 	healthChecker, err := crdbpool.NewNodeHealthChecker("postgres://username:password@localhost:5432/database_name")
 	if err != nil {
 		panic(err)
 	}
 
-	// configure pgxpool as you normally would
+	// Configure pgxpool as you normally would
 	config, err := pgxpool.ParseConfig("postgres://username:password@localhost:5432/database_name")
 	if err != nil {
 		panic(err)
 	}
 
-	// create a RetryPool to wrap the pgxpool
+	// Wrap the pgxpool with node-aware retry logic
 	maxRetries := 10
 	connectRate := 100 * time.Millisecond
-	pool, err := crdbpool.NewRetryPool(context.Background(), "pool", config, healthChecker, maxRetries, connectRate)
+	pool, err := crdbpool.NewRetryPool(context.TODO(), "pool", config, healthChecker, maxRetries, connectRate)
 	if err != nil {
 		panic(err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.TODO())
 	defer cancel()
 
-	// start balancing connections and discovering nodes
+	// Start balancing connections and discovering nodes
 	g, ctx := errgroup.WithContext(ctx)
 	balancer := pool.NewNodeConnectionBalancer(pool, healthChecker, 5*time.Second)
 	g.Go(func() error {
@@ -55,7 +79,7 @@ func main() {
 		return nil
 	})
 
-	// use the pool
+	// Use the pgxpool as normal.
 	pool.QueryFunc(ctx, func(ctx context.Context, rows pgx.Rows) error {
 		docs := make([][]byte, 0)
 		for rows.Next() {
@@ -70,3 +94,15 @@ func main() {
 	}, "SELECT * FROM documents;")
 }
 ```
+
+## Acknowledgements
+
+This library was produced from [AuthZed]'s findings along with the collaboration of [Cockroach Labs].
+As a result, we'd like to thank a few notable contributors:
+
+- [Evan Cordell](https://github.com/ecordell)
+- [Bram Gruneir](https://github.com/BramGruneir)
+- Steven Hand
+
+[AuthZed]: https://authzed.com
+[Cockroach Labs]: https://cockroachdb.com
