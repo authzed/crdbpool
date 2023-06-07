@@ -6,6 +6,7 @@
 `crdbpool` implements a node-aware connection pool for [CockroachDB] by wrapping [pgx].
 
 By introducing advanced health-checking, this library is able to improve:
+
 - performance by balancing connections evenly across nodes
 - resiliency by retrying failed queries against a different node
 
