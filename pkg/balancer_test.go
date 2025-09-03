@@ -150,16 +150,19 @@ func TestNodeConnectionBalancerPrune(t *testing.T) {
 
 			p := newNodeConnectionBalancer[*FakePoolConn[*FakeConn], *FakeConn](pool, tracker, 1*time.Minute)
 			p.seed = 0
+			// nolint:gosec
+			// G404 use of non cryptographically secure random number generator is not concern here,
+			// as it's used for jittering the interval for health checks.
 			p.rnd = rand.New(rand.NewSource(0))
 
 			for _, n := range tt.conns {
 				pool.nodeForConn[NewFakeConn()] = n
 			}
 
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 
-			p.pruneConnections(ctx)
+			p.mustPruneConnections(ctx)
 			require.Equal(t, len(tt.expectedGC), len(pool.gc))
 			gcFromNodes := make([]uint32, 0, len(tt.expectedGC))
 			for _, n := range pool.gc {

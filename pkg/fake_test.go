@@ -2,9 +2,9 @@ package pool
 
 import (
 	"context"
-	"hash/maphash"
-	"strconv"
 	"sync"
+
+	"github.com/google/uuid"
 )
 
 var (
@@ -38,13 +38,13 @@ type FakePool struct {
 	sync.Mutex
 	id          string
 	maxConns    uint32
-	gc          map[*FakeConn]uint32
-	nodeForConn map[*FakeConn]uint32
+	gc          map[*FakeConn]uint32 // GUARDED_BY(Mutex)
+	nodeForConn map[*FakeConn]uint32 // GUARDED_BY(Mutex)
 }
 
 func NewFakePool(maxConns uint32) *FakePool {
 	return &FakePool{
-		id:          strconv.FormatUint(new(maphash.Hash).Sum64(), 16),
+		id:          uuid.NewString(),
 		maxConns:    maxConns,
 		gc:          make(map[*FakeConn]uint32, 0),
 		nodeForConn: make(map[*FakeConn]uint32, 0),
@@ -57,7 +57,7 @@ func (f *FakePool) ID() string {
 
 func (f *FakePool) AcquireAllIdle(_ context.Context) []*FakePoolConn[*FakeConn] {
 	conns := make([]*FakePoolConn[*FakeConn], 0, len(f.nodeForConn))
-	f.Range(func(conn *FakeConn, value uint32) {
+	f.Range(func(conn *FakeConn, _ uint32) {
 		conns = append(conns, &FakePoolConn[*FakeConn]{conn: conn})
 	})
 	return conns
