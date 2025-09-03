@@ -8,13 +8,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors/retry"
+	"github.com/ccoveille/go-safecast"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/time/rate"
 
+	"github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors/retry"
 	log "github.com/rs/zerolog"
 )
 
@@ -39,8 +40,8 @@ type RetryPool struct {
 
 	sync.RWMutex
 	maxRetries  uint8
-	nodeForConn map[*pgx.Conn]uint32
-	gc          map[*pgx.Conn]struct{}
+	nodeForConn map[*pgx.Conn]uint32   // GUARDED_BY(RWMutex)
+	gc          map[*pgx.Conn]struct{} // GUARDED_BY(RWMutex)
 }
 
 func NewRetryPool(ctx context.Context, name string, config *pgxpool.Config, healthTracker *NodeHealthTracker, maxRetries uint8, connectRate time.Duration) (*RetryPool, error) {
@@ -141,12 +142,16 @@ func (p *RetryPool) ID() string {
 
 // MaxConns returns the MaxConns configured on the underlying pool
 func (p *RetryPool) MaxConns() uint32 {
-	return uint32(p.pool.Config().MaxConns)
+	// This should be non-negative
+	maxConns, _ := safecast.ToUint32(p.pool.Config().MaxConns)
+	return maxConns
 }
 
 // MinConns returns the MinConns configured on the underlying pool
 func (p *RetryPool) MinConns() uint32 {
-	return uint32(p.pool.Config().MinConns)
+	// This should be non-negative
+	minConns, _ := safecast.ToUint32(p.pool.Config().MinConns)
+	return minConns
 }
 
 // ExecFunc is a replacement for pgxpool.Pool.Exec that allows resetting the
@@ -305,11 +310,15 @@ func (p *RetryPool) withRetries(ctx context.Context, fn func(conn *pgxpool.Conn)
 			continue
 		}
 		conn.Release()
+
 		// error is not resettable or retryable
-		log.Ctx(ctx).Warn().Err(err).Uint8("retries", retries).Msg("error is not resettable or retryable")
+		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			log.Ctx(ctx).Warn().Err(err).Uint8("retries", retries).Msg("error is not resettable or retryable")
+		}
+
 		return err
 	}
-	return &MaxRetryError{MaxRetries: p.maxRetries, LastErr: err}
+	return &MaxRetryError{MaxRetries: maxRetries, LastErr: err}
 }
 
 // GC marks a connection for destruction on the next Acquire.
@@ -323,14 +332,8 @@ func (p *RetryPool) GC(conn *pgx.Conn) {
 	delete(p.nodeForConn, conn)
 }
 
-func sleepOnErr(ctx context.Context, err error, retries uint8) {
-	after := retry.BackoffExponentialWithJitter(100*time.Millisecond, 0.5)(ctx, uint(retries+1)) // add one so we always wait at least a little bit
-	log.Ctx(ctx).Warn().Err(err).Dur("after", after).Msg("retrying on database error")
-	time.Sleep(after)
-}
-
 func (p *RetryPool) acquireFromDifferentNode(ctx context.Context, nodeID uint32) (*pgxpool.Conn, error) {
-	log.Ctx(ctx).Info().Uint32("node_id", nodeID).Msg("acquiring a connection from a different node")
+	log.Ctx(ctx).Trace().Uint32("node_id", nodeID).Msg("acquiring a connection from a different node")
 	for {
 		conn, err := p.pool.Acquire(ctx)
 		if err != nil {
@@ -348,9 +351,65 @@ func (p *RetryPool) acquireFromDifferentNode(ctx context.Context, nodeID uint32)
 			conn.Release()
 			continue
 		}
-		log.Ctx(ctx).Info().Uint32("old node id", nodeID).Uint32("new node id", id).Msg("acquired a connection from a different node")
+		log.Ctx(ctx).Trace().Uint32("old node id", nodeID).Uint32("new node id", id).Msg("acquired a connection from a different node")
 		return conn, nil
 	}
+}
+
+// sleepOnErr sleeps for a short period of time after an error has occurred.
+func sleepOnErr(ctx context.Context, err error, retries uint8) {
+	after := retry.BackoffExponentialWithJitter(25*time.Millisecond, 0.5)(ctx, uint(retries+1)) // add one so we always wait at least a little bit
+	log.Ctx(ctx).Debug().Err(err).Dur("after", after).Uint8("retry", retries+1).Msg("retrying on database error")
+
+	select {
+	case <-time.After(after):
+	case <-ctx.Done():
+	}
+}
+
+// IsRetryableError returns whether the given CRDB error is a retryable error.
+func IsRetryableError(ctx context.Context, err error) bool {
+	sqlState := sqlErrorCode(err)
+	if sqlState == "" {
+		log.Ctx(ctx).Debug().Err(err).Msg("couldn't determine a sqlstate error code")
+	}
+
+	// Retryable errors: the transaction should be retried but no new connection
+	// is needed.
+	if sqlState == CrdbRetryErrCode ||
+		// Error encountered when crdb nodes have large clock skew
+		(sqlState == CrdbUnknownSQLState && strings.Contains(err.Error(), CrdbClockSkewMessage)) {
+		return true
+	}
+
+	return false
+}
+
+// IsResettableError returns whether the given CRDB error is a resettable error.
+func IsResettableError(ctx context.Context, err error) bool {
+	// detect when an error is likely due to a node taken out of service
+	if strings.Contains(err.Error(), "broken pipe") ||
+		strings.Contains(err.Error(), "unexpected EOF") ||
+		strings.Contains(err.Error(), "conn closed") ||
+		strings.Contains(err.Error(), "connection refused") ||
+		strings.Contains(err.Error(), "connection reset by peer") {
+		return true
+	}
+
+	sqlState := sqlErrorCode(err)
+	if sqlState == "" {
+		log.Ctx(ctx).Debug().Err(err).Msg("couldn't determine a sqlstate error code")
+	}
+
+	// Ambiguous result error includes connection closed errors
+	// https://www.cockroachlabs.com/docs/stable/common-errors.html#result-is-ambiguous
+	if sqlState == CrdbAmbiguousErrorCode ||
+		// Reset on node draining
+		sqlState == CrdbServerNotAcceptingClients {
+		return true
+	}
+
+	return false
 }
 
 func wrapRetryableError(ctx context.Context, err error) error {
@@ -367,31 +426,11 @@ func wrapRetryableError(ctx context.Context, err error) error {
 		return err
 	}
 
-	// detect when an error is likely due to a node taken out of service
-	if strings.Contains(err.Error(), "broken pipe") ||
-		strings.Contains(err.Error(), "unexpected EOF") ||
-		strings.Contains(err.Error(), "conn closed") ||
-		strings.Contains(err.Error(), "connection reset by peer") {
+	if IsResettableError(ctx, err) {
 		return &ResettableError{Err: err}
 	}
 
-	sqlState := sqlErrorCode(err)
-	if sqlState == "" {
-		log.Ctx(ctx).Debug().Err(err).Msg("couldn't determine a sqlstate error code")
-	}
-	// Ambiguous result error includes connection closed errors
-	// https://www.cockroachlabs.com/docs/stable/common-errors.html#result-is-ambiguous
-	if sqlState == CrdbAmbiguousErrorCode ||
-		// Reset on node draining
-		sqlState == CrdbServerNotAcceptingClients {
-		return &ResettableError{Err: err}
-	}
-
-	// Retryable errors: the transaction should be retried but no new connection
-	// is needed.
-	if sqlState == CrdbRetryErrCode ||
-		// Error encountered when crdb nodes have large clock skew
-		(sqlState == CrdbUnknownSQLState && strings.Contains(err.Error(), CrdbClockSkewMessage)) {
+	if IsRetryableError(ctx, err) {
 		return &RetryableError{Err: err}
 	}
 	return err

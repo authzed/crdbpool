@@ -33,8 +33,8 @@ func init() {
 type NodeHealthTracker struct {
 	sync.RWMutex
 	connConfig    *pgx.ConnConfig
-	healthyNodes  map[uint32]struct{}
-	nodesEverSeen map[uint32]*rate.Limiter
+	healthyNodes  map[uint32]struct{}      // GUARDED_BY(RWMutex)
+	nodesEverSeen map[uint32]*rate.Limiter // GUARDED_BY(RWMutex)
 	newLimiter    func() *rate.Limiter
 }
 
@@ -58,6 +58,9 @@ func NewNodeHealthChecker(url string) (*NodeHealthTracker, error) {
 // Poll starts polling the cluster and recording the node IDs that it sees.
 func (t *NodeHealthTracker) Poll(ctx context.Context, interval time.Duration) {
 	ticker := jitterbug.New(interval, jitterbug.Uniform{
+		// nolint:gosec
+		// G404 use of non cryptographically secure random number generator is not concern here,
+		// as it's used for jittering the interval for health checks.
 		Source: rand.New(rand.NewSource(time.Now().Unix())),
 		Min:    interval,
 	})
