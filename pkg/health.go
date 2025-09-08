@@ -40,6 +40,12 @@ type NodeHealthTracker struct {
 
 // NewNodeHealthChecker builds a health checker that polls the cluster at the given url.
 func NewNodeHealthChecker(url string) (*NodeHealthTracker, error) {
+	return NewNodeHealthCheckerWithRateLimit(url, rate.Every(1*time.Minute), errorBurst)
+}
+
+// NewNodeHealthCheckerWithRateLimit builds a health checker with configurable rate limiting.
+// This allows for different rate limiting behavior in tests vs production.
+func NewNodeHealthCheckerWithRateLimit(url string, rateLimit rate.Limit, burst int) (*NodeHealthTracker, error) {
 	connConfig, err := pgx.ParseConfig(url)
 	if err != nil {
 		return nil, err
@@ -50,7 +56,7 @@ func NewNodeHealthChecker(url string) (*NodeHealthTracker, error) {
 		healthyNodes:  make(map[uint32]struct{}, 0),
 		nodesEverSeen: make(map[uint32]*rate.Limiter, 0),
 		newLimiter: func() *rate.Limiter {
-			return rate.NewLimiter(rate.Every(1*time.Minute), errorBurst)
+			return rate.NewLimiter(rateLimit, burst)
 		},
 	}, nil
 }
@@ -76,6 +82,7 @@ func (t *NodeHealthTracker) Poll(ctx context.Context, interval time.Duration) {
 }
 
 // tryConnect attempts to connect to a node and ping it. If successful, that node is marked healthy.
+// If the connection or ping fails, the node is marked as potentially unhealthy based on rate limiting.
 func (t *NodeHealthTracker) tryConnect(interval time.Duration) {
 	ctx, cancel := context.WithTimeout(context.Background(), interval)
 	defer cancel()
@@ -83,19 +90,28 @@ func (t *NodeHealthTracker) tryConnect(interval time.Duration) {
 	if err != nil {
 		return
 	}
-	defer conn.Close(ctx)
+	defer func() {
+		if err := conn.Close(ctx); err != nil {
+			log.Ctx(ctx).Debug().Err(err).Msg("failed to close health check connection")
+		}
+	}()
+
+	connNodeID := nodeID(conn)
 	if err = conn.Ping(ctx); err != nil {
+		// Ping failed - mark this specific node as unhealthy
+		t.SetNodeHealth(connNodeID, false)
 		return
 	}
+
 	log.Ctx(ctx).Trace().
-		Uint32("nodeID", nodeID(conn)).
+		Uint32("nodeID", connNodeID).
 		Msg("health check connected to node")
 
 	// nodes are marked healthy after a successful connection
-	t.SetNodeHealth(nodeID(conn), true)
+	t.SetNodeHealth(connNodeID, true)
 	t.Lock()
 	defer t.Unlock()
-	t.nodesEverSeen[nodeID(conn)] = t.newLimiter()
+	t.nodesEverSeen[connNodeID] = t.newLimiter()
 }
 
 // SetNodeHealth marks a node as either healthy or unhealthy.

@@ -2,6 +2,8 @@
 
 [![Go Report Card](https://goreportcard.com/badge/github.com/authzed/crdbpool)](https://goreportcard.com/report/github.com/authzed/crdbpool)
 [![GoDoc](https://pkg.go.dev/badge/s.svg)](https://pkg.go.dev/github.com/authzed/crdbpool)
+[![Build & Test](https://github.com/authzed/crdbpool/actions/workflows/test.yaml/badge.svg)](https://github.com/authzed/crdbpool/actions/workflows/test.yaml)
+[![Integration Tests](https://github.com/authzed/crdbpool/actions/workflows/integration.yaml/badge.svg)](https://github.com/authzed/crdbpool/actions/workflows/integration.yaml)
 
 `crdbpool` implements a node-aware connection pool for [CockroachDB] by wrapping [pgx].
 

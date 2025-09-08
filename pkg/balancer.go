@@ -1,3 +1,4 @@
+// Package pool provides connection pooling and load balancing for CockroachDB clusters.
 package pool
 
 import (
