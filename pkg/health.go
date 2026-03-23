@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/lthibault/jitterbug"
 	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/time/rate"
 
@@ -57,19 +56,30 @@ func NewNodeHealthChecker(url string) (*NodeHealthTracker, error) {
 
 // Poll starts polling the cluster and recording the node IDs that it sees.
 func (t *NodeHealthTracker) Poll(ctx context.Context, interval time.Duration) {
-	ticker := jitterbug.New(interval, jitterbug.Uniform{
-		// nolint:gosec
-		// G404 use of non cryptographically secure random number generator is not concern here,
-		// as it's used for jittering the interval for health checks.
-		Source: rand.New(rand.NewSource(time.Now().Unix())),
-		Min:    interval,
-	})
-	defer ticker.Stop()
+	if interval <= 0 {
+		log.Ctx(ctx).Warn().Dur("interval", interval).Msg("health check poll interval must be positive, polling disabled")
+		return
+	}
+
+	// nolint:gosec
+	// G404 use of non cryptographically secure random number generator is not a concern here,
+	// as it's used for jittering the interval for health checks.
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+
+	// Reusable timer - avoids allocating a new channel on each tick
+	halfInterval := int64(interval) / 2
+	jitter := time.Duration(rng.Int63n(int64(interval)) - halfInterval)
+	timer := time.NewTimer(interval + jitter)
+	defer timer.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-timer.C:
+			// Reset timer for next tick before tryConnect so timer runs concurrently
+			jitter = time.Duration(rng.Int63n(int64(interval)) - halfInterval)
+			timer.Reset(interval + jitter)
 			t.tryConnect(interval)
 		}
 	}
