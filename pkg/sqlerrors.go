@@ -10,15 +10,18 @@ import (
 )
 
 const (
+	// CrdbRetryErrCode is the error code for transaction restart errors.
 	// https://www.cockroachlabs.com/docs/stable/common-errors.html#restart-transaction
 	CrdbRetryErrCode = "40001"
+	// CrdbAmbiguousErrorCode is the error code for ambiguous result errors.
 	// https://www.cockroachlabs.com/docs/stable/common-errors.html#result-is-ambiguous
 	CrdbAmbiguousErrorCode = "40003"
+	// CrdbServerNotAcceptingClients is the error code when server is not accepting clients.
 	// https://www.cockroachlabs.com/docs/stable/node-shutdown.html#connection-retry-loop
 	CrdbServerNotAcceptingClients = "57P01"
-	// Error when SqlState is unknown
+	// CrdbUnknownSQLState is the error code when SqlState is unknown.
 	CrdbUnknownSQLState = "XXUUU"
-	// Error message encountered when crdb nodes have large clock skew
+	// CrdbClockSkewMessage is the error message encountered when crdb nodes have large clock skew.
 	CrdbClockSkewMessage = "cannot specify timestamp in the future"
 )
 
@@ -43,6 +46,7 @@ func (e *MaxRetryError) Error() string {
 
 func (e *MaxRetryError) Unwrap() error { return e.LastErr }
 
+// GRPCStatus returns the gRPC status for MaxRetryError.
 func (e *MaxRetryError) GRPCStatus() *status.Status {
 	s, ok := status.FromError(e.Unwrap())
 	if !ok {
@@ -66,6 +70,7 @@ func (e *ResettableError) Error() string {
 
 func (e *ResettableError) Unwrap() error { return e.Err }
 
+// GRPCStatus returns the gRPC status for ResettableError.
 func (e *ResettableError) GRPCStatus() *status.Status {
 	if e.Err == nil {
 		return status.New(codes.Unavailable, "resettable error")
@@ -86,6 +91,7 @@ func (e *RetryableError) Error() string {
 }
 func (e *RetryableError) Unwrap() error { return e.Err }
 
+// GRPCStatus returns the gRPC status for RetryableError.
 func (e *RetryableError) GRPCStatus() *status.Status {
 	if e.Err == nil {
 		return status.New(codes.Unavailable, "retryable error")

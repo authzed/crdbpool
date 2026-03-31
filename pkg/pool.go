@@ -31,8 +31,11 @@ func init() {
 
 type ctxDisableRetries struct{}
 
+// CtxDisableRetries is a context key used to disable retries for a specific request.
 var CtxDisableRetries ctxDisableRetries
 
+// RetryPool is a connection pool that automatically retries failed operations
+// and tracks node health for load balancing across CockroachDB cluster nodes.
 type RetryPool struct {
 	pool          *pgxpool.Pool
 	id            string
@@ -44,6 +47,8 @@ type RetryPool struct {
 	gc          map[*pgx.Conn]struct{} // GUARDED_BY(RWMutex)
 }
 
+// NewRetryPool creates a new RetryPool with the given configuration.
+// It sets up connection pooling, health tracking, and retry behavior for database operations.
 func NewRetryPool(ctx context.Context, name string, config *pgxpool.Config, healthTracker *NodeHealthTracker, maxRetries uint8, connectRate time.Duration) (*RetryPool, error) {
 	config = config.Copy()
 	p := &RetryPool{
