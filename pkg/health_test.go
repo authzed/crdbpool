@@ -1,6 +1,7 @@
 package pool
 
 import (
+	"math/rand"
 	"testing"
 	"time"
 
@@ -38,4 +39,24 @@ func TestNodeHealthTracker(t *testing.T) {
 	require.False(t, tracker.IsHealthy(1))
 	require.True(t, tracker.IsHealthy(2))
 	require.Equal(t, tracker.HealthyNodeCount(), 1)
+}
+
+func TestJitteredInterval(t *testing.T) {
+	// nolint:gosec
+	// G404 a deterministic source keeps the test reproducible.
+	rng := rand.New(rand.NewSource(1))
+
+	const interval = 100 * time.Millisecond
+	var sum time.Duration
+	const draws = 10000
+
+	for range draws {
+		jittered := jitteredInterval(rng, interval)
+		require.GreaterOrEqual(t, jittered, interval/2)
+		require.Less(t, jittered, interval+interval/2)
+		sum += jittered
+	}
+
+	// the distribution is centered on the requested interval
+	require.InDelta(t, interval, sum/draws, float64(interval/20))
 }

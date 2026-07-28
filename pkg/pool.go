@@ -95,15 +95,24 @@ func NewRetryPool(ctx context.Context, name string, config *pgxpool.Config, heal
 		return !ok
 	}
 
+	prepareConn := config.PrepareConn
+	// nolint:staticcheck
+	// BeforeAcquire is deprecated in favor of PrepareConn, but a caller may still
+	// be setting it. Setting PrepareConn below makes pgx ignore it, so honor it here.
 	beforeAcquire := config.BeforeAcquire
-	config.BeforeAcquire = func(ctx context.Context, conn *pgx.Conn) bool {
-		if beforeAcquire != nil {
+	config.PrepareConn = func(ctx context.Context, conn *pgx.Conn) (bool, error) {
+		switch {
+		case prepareConn != nil:
+			if ok, err := prepareConn(ctx, conn); !ok || err != nil {
+				return false, err
+			}
+		case beforeAcquire != nil:
 			if !beforeAcquire(ctx, conn) {
-				return false
+				return false, nil
 			}
 		}
 
-		return gcConnection(conn)
+		return gcConnection(conn), nil
 	}
 
 	afterRelease := config.AfterRelease

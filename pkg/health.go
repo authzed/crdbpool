@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/lthibault/jitterbug"
 	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/time/rate"
 
@@ -57,22 +56,37 @@ func NewNodeHealthChecker(url string) (*NodeHealthTracker, error) {
 
 // Poll starts polling the cluster and recording the node IDs that it sees.
 func (t *NodeHealthTracker) Poll(ctx context.Context, interval time.Duration) {
-	ticker := jitterbug.New(interval, jitterbug.Uniform{
-		// nolint:gosec
-		// G404 use of non cryptographically secure random number generator is not concern here,
-		// as it's used for jittering the interval for health checks.
-		Source: rand.New(rand.NewSource(time.Now().Unix())),
-		Min:    interval,
-	})
-	defer ticker.Stop()
+	if interval <= 0 {
+		log.Ctx(ctx).Warn().Dur("interval", interval).Msg("health check poll interval must be positive, polling disabled")
+		return
+	}
+
+	// nolint:gosec
+	// G404 use of non cryptographically secure random number generator is not a concern here,
+	// as it's used for jittering the interval for health checks.
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+
+	// Reusable timer - avoids allocating a new channel on each tick
+	timer := time.NewTimer(jitteredInterval(rng, interval))
+	defer timer.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-timer.C:
+			// Reset timer for next tick before tryConnect so timer runs concurrently
+			timer.Reset(jitteredInterval(rng, interval))
 			t.tryConnect(interval)
 		}
 	}
+}
+
+// jitteredInterval offsets interval by a uniformly random amount in
+// [-interval/2, +interval/2), so that pollers started at the same time spread
+// their load across the cluster instead of aligning on the same tick.
+func jitteredInterval(rng *rand.Rand, interval time.Duration) time.Duration {
+	return interval + time.Duration(rng.Int63n(int64(interval))-int64(interval)/2)
 }
 
 // tryConnect attempts to connect to a node and ping it. If successful, that node is marked healthy.
